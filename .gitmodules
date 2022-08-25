@@ -1,0 +1,9 @@
+[submodule "DogScepter"]
+	path = DogScepter
+	url = git@github.com:colinator27/DogScepter.git
+[submodule "FNA"]
+	path = FNA
+	url = git@github.com:FNA-XNA/FNA.git
+[submodule "ImGui.NET"]
+	path = ImGui.NET
+	url = git@github.com:mellinoe/ImGui.NET.git
