@@ -221,10 +221,10 @@ namespace GmTileHistory {
 			}
 			public int depth;
 			public Vector2 RealPosition(float scale, Vector2 transform) {
-				return (position * scale) + transform;
+				return ((position - pivot) * scale) + transform;
 			}
 			public Vector2 RealGraphicPosition(float scale, Vector2 transform) {
-				return (actualPosition * scale) + transform;
+				return ((actualPosition - pivot) * scale) + transform;
 			}
 			/*public Vector2 RealSize(float scale) {
 				return new Vector2(imageSize.X, imageSize.Y) * scale;
@@ -339,14 +339,14 @@ namespace GmTileHistory {
 			if (m_currentRoomTiles.Count == 0) {
 				return 0;
 			}
-			return (int)Math.Clamp(m_tileCap - 1, 0, m_currentRoomTiles.Count - 1);
+			return (int)Math.Clamp(m_tileCap - 1, 0, Math.Max(m_currentRoomTiles.Count - 1, 0)); //this max is to prevent crashing when room has neither of these
 		}
 		int GetCurrentObjectIndex() {
 			return Math.Clamp(m_flags.HasFlag(RoomViewerFlags.UseSeparateSliderForObjects)
 				?
 				m_objectCap - 1
 				:
-				(((int)m_tileCap - 1) - m_currentRoomTiles.Count), 0, m_currentRoomObjects.Count - 1);
+				(((int)m_tileCap - 1) - m_currentRoomTiles.Count), 0, Math.Max(m_currentRoomObjects.Count - 1, 0));
 		}
 
 		protected override void Draw(GameTime gameTime) {
@@ -499,10 +499,10 @@ Tile colour: R {colour.R} G {colour.G} B {colour.B} A {colour.A}");
 						var objCurrent = m_currentRoomObjects[GetCurrentObjectIndex()];
 						var colour = ABGRToColour(objCurrent.Color);
 						string codeDescription = ""; //for pre create/creation code
-						if (objCurrent.PreCreateCodeID != 0) {
+						if (objCurrent.PreCreateCodeID > 0) {
 							codeDescription = $"Object pre create entry: {m_codeChunk[objCurrent.PreCreateCodeID].Name}";
 						}
-						if (objCurrent.CreationCodeID != -1) {
+						if (objCurrent.CreationCodeID > 0) {
 							if (codeDescription.Length != 0) {
 								codeDescription += "\n";
 							}
