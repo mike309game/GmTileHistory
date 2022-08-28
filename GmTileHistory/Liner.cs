@@ -23,7 +23,7 @@ namespace GmTileHistory {
 			m_lineCount++;
 		}
 
-		public static void PushRect(float x, float y, float width, float height, Color colour) {
+		public static void PushOutline(float x, float y, float width, float height, Color colour) {
 			PushLine(x, y, x + width, y, colour);
 			PushLine(x + width, y, x + width, y + height, colour);
 			PushLine(x + width, y + height, x, y + height, colour);
