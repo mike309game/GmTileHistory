@@ -397,11 +397,11 @@ namespace GmTileHistory {
 			m_gdm.PreferredBackBufferWidth = width;
 			m_gdm.PreferredBackBufferHeight = height;
 			m_gdm.IsFullScreen = fullscreen;
+			m_gdm.ApplyChanges();
 			Liner.m_basicEffect.Projection = Matrix.CreateOrthographicOffCenter
 				(0, GraphicsDevice.Viewport.Width,     // left, right
 				GraphicsDevice.Viewport.Height, 0,    // bottom, top
 				0, 1);
-			m_gdm.ApplyChanges();
 		}
 
 		protected override void Draw(GameTime gameTime) {
