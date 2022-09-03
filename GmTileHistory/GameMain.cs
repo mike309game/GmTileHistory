@@ -25,7 +25,8 @@ namespace GmTileHistory {
 
 		IsAnimating = 1 << 20, //Is animation going on
 		IsVideoMode = 1 << 21, //Auto advance rooms, with a delay between when advancing
-		VideoModeDelaying = 1 << 22
+		VideoModeDelaying = 1 << 22,
+		Fullscreen = 1 << 31
 	}
 
 	[Flags]
@@ -41,15 +42,18 @@ namespace GmTileHistory {
 	class GameMain : Game {
 		GraphicsDeviceManager m_gdm;
 		SpriteBatch m_spriteBatch;
+		int gameResX = 1360;
+		int gameResY = 860;
 
 		GMDataReader m_dataReader;
 		GMData m_data;
 
 		List<Texture2D> m_textures = new();
 		Dictionary<int, Texture2D> m_textureDict = new();
-		Texture2D m_missingTexture;
 
+		Texture2D m_missingTexture;
 		Texture2D m_backgroundTexture;
+		Texture2D m_oobText;
 
 		//Cache
 		GMUniquePointerList<GMTexturePage> m_texturePageChunk;
@@ -88,7 +92,7 @@ namespace GmTileHistory {
 			RoomViewerFlags.ShowRectSource |
 			RoomViewerFlags.ShowMainWindow);
 
-		RoomViewerFlags m_flags = m_startFlags;
+		public RoomViewerFlags m_flags = m_startFlags;
 
 		EventRecord m_eventsToRecord = (
 			EventRecord.HasColour |
@@ -258,16 +262,26 @@ namespace GmTileHistory {
 				return new Vector2(imageSize.X, imageSize.Y) * scale;
 			}*/
 			public Vector2 RealGraphicSize(float scale) {
-				return (new Vector2(graphicSource.Width, graphicSource.Height) + textureOffset) * scale;
+				return (new Vector2(graphicSource.Width, graphicSource.Height)) * scale;
+			}
+			public bool Bleeds {
+				get {
+					return (graphicSource.Width + localSourcePos.X) > imageSize.X || (graphicSource.Height+ localSourcePos.Y) > imageSize.Y;
+				}
 			}
 			public Rectangle ClampedSource() {
 				var source = graphicSource;
-				source.Width = (int)Math.Min(imageSize.X - localSourcePos.X, graphicSource.Width);
-				source.Height = (int)Math.Min(imageSize.Y - localSourcePos.Y, graphicSource.Height);
+				source.Width = (int)Math.Min(textureSize.X - localSourcePos.X, graphicSource.Width);
+				source.Height = (int)Math.Min(textureSize.Y - localSourcePos.Y, graphicSource.Height);
 				return source;
 			}
 			public void Draw(SpriteBatch spriteBatch, bool clampRect) {
-				var source = clampRect ? ClampedSource() : graphicSource;
+				Rectangle source;
+				if(!Bleeds || clampRect) {
+					source = ClampedSource();
+				} else {
+					source = graphicSource;
+				}
 				spriteBatch.Draw(texture,
 					position,
 					source,
@@ -330,9 +344,7 @@ namespace GmTileHistory {
 					rect.colour = ABGRToColour(obj.Color);
 				}
 			}
-			if (rect is null) {
-				rect = MakeRect(obj.X, obj.Y, obj.Angle, obj.ScaleX, obj.ScaleY); //placeholder
-			}
+			rect ??= MakeRect(obj.X, obj.Y, obj.Angle, obj.ScaleX, obj.ScaleY); //if there was no sprite rect, we give it the question mark icon
 			return rect;
 		}
 
@@ -345,8 +357,8 @@ namespace GmTileHistory {
 			rect.depth = tile.Depth;
 			//rect.imageSize = new(tile.Width, tile.Height);
 			rect.graphicSource.Location += new Point(tile.SourceX, tile.SourceY);
-			rect.graphicSource.Width = tile.Width - (int)rect.textureOffset.X;
-			rect.graphicSource.Height = tile.Height - (int)rect.textureOffset.Y;
+			rect.graphicSource.Width = tile.Width;// - (int)rect.textureOffset.X;
+			rect.graphicSource.Height = tile.Height;// - (int)rect.textureOffset.Y;
 			rect.colour = ABGRToColour(tile.Color);
 			rect.localSourcePos = new(tile.SourceX, tile.SourceY);
 			return rect;
@@ -356,6 +368,7 @@ namespace GmTileHistory {
 		void SetRoomCache() {
 			m_tileRects.Clear();
 			m_objectRects.Clear();
+			//m_eventManager.m_eventList.Clear();
 
 			m_currentRoom = m_roomChunk[m_selectedRoom];
 			m_currentRoomTiles = m_currentRoom.Tiles;
@@ -380,6 +393,17 @@ namespace GmTileHistory {
 				(((int)m_tileCap - 1) - m_currentRoomTiles.Count), 0, Math.Max(m_currentRoomObjects.Count - 1, 0));
 		}
 
+		void ApplyScreen(int width, int height, bool fullscreen) {
+			m_gdm.PreferredBackBufferWidth = width;
+			m_gdm.PreferredBackBufferHeight = height;
+			m_gdm.IsFullScreen = fullscreen;
+			Liner.m_basicEffect.Projection = Matrix.CreateOrthographicOffCenter
+				(0, GraphicsDevice.Viewport.Width,     // left, right
+				GraphicsDevice.Viewport.Height, 0,    // bottom, top
+				0, 1);
+			m_gdm.ApplyChanges();
+		}
+
 		protected override void Draw(GameTime gameTime) {
 			GraphicsDevice.Clear(Color.CornflowerBlue);
 
@@ -388,7 +412,7 @@ namespace GmTileHistory {
 			m_spriteBatch.Draw(m_backgroundTexture, new Rectangle(0, 0, GraphicsDevice.Viewport.Width, GraphicsDevice.Viewport.Height), Color.White);
 			m_spriteBatch.End();
 
-			if (m_io.MouseDown[2]) {
+			if (m_io.MouseDown[2] && IsActive) {
 				m_tilemapTransform.X += m_io.MouseDelta.X;
 				m_tilemapTransform.Y += m_io.MouseDelta.Y;
 			}
@@ -447,6 +471,21 @@ namespace GmTileHistory {
 
 			m_spriteBatch.End();
 
+			//Draw oob text
+			bool drawOobText = false;
+			var roomRect = new Rectangle(0, 0, m_currentRoom.Width, m_currentRoom.Height);
+			if (lastTile is not null) {
+				drawOobText = !roomRect.Contains((int)lastTile.position.X, (int)lastTile.position.Y);
+			} else if(lastObject is not null){
+				drawOobText = !roomRect.Contains((int)lastObject.position.X, (int)lastObject.position.Y);
+			}
+
+			if (drawOobText) {
+				m_spriteBatch.Begin();
+				m_spriteBatch.Draw(m_oobText, new Vector2(GraphicsDevice.Viewport.Width - m_oobText.Width, 0), Color.White);
+				m_spriteBatch.End();
+			}
+
 			#region Tile source rect interface
 			bool canDoTileStuff = m_tileCap - 1 < m_tileRects.Count && lastTile != null;
 			if (true) {
@@ -454,7 +493,7 @@ namespace GmTileHistory {
 					int paletteWidth = (int)(Math.Min(m_tilePaletteSize.X, lastTile.imageSize.X));
 					int paletteHeight = (int)(Math.Min(m_tilePaletteSize.Y, lastTile.imageSize.Y));
 
-					m_tilePalettePos.Y = GraphicsDevice.Viewport.Height / 2 - paletteHeight / 2; //vertically center palette
+					//m_tilePalettePos.Y = GraphicsDevice.Viewport.Height / 2 - paletteHeight / 2; //vertically center palette
 
 					m_tilePaletteOffset = new( //center tile palette on tile source
 						Math.Clamp((lastTile.localSourcePos.X - paletteWidth / 2) + lastTile.graphicSource.Width / 2, 0, Math.Max(lastTile.textureSize.X - paletteWidth, 0)), //dirty way to prevent crash because of gamemaker moments
@@ -506,7 +545,7 @@ namespace GmTileHistory {
 			#endregion
 
 			//Draw events
-			m_eventManager.Update(in gameTime, in m_spriteBatch, (int)m_tileCap - 1);
+			m_eventManager.Update(in gameTime, in m_spriteBatch, (int)m_tileCap - 1, m_selectedRoom, canDoTileStuff ? new(0,m_tilePaletteSize.Y+m_borderSegmentSize.Y) : Vector2.Zero);
 
 			m_imRenderer.AfterLayout();
 
@@ -584,18 +623,15 @@ Object colour: R {colour.R} G {colour.G} B {colour.B} A {colour.A}");
 					//Config imgui
 					if (ImGui.BeginTabItem("Settings")) {
 						ImGui.BeginChild("Child");
-						if(ImGui.Button("Toggle fullscreen")) {
-							if(m_gdm.IsFullScreen) {
-								m_gdm.PreferredBackBufferWidth = 1360;
-								m_gdm.PreferredBackBufferHeight = 860;
-								m_gdm.ToggleFullScreen();
-							} else {
-								m_gdm.PreferredBackBufferWidth = m_gdm.GraphicsDevice.DisplayMode.Width;
-								m_gdm.PreferredBackBufferHeight= m_gdm.GraphicsDevice.DisplayMode.Height;
-								m_gdm.ToggleFullScreen();
-							}
-						}
 						var flags = (int)m_flags;
+						ImGui.TextUnformatted("Tip: double click to manually change value");
+						ImGui.DragInt("Window width", ref gameResX, 1, 16, m_gdm.GraphicsDevice.DisplayMode.Width);
+						ImGui.DragInt("Window height", ref gameResY, 1, 16, m_gdm.GraphicsDevice.DisplayMode.Height);
+						ImGui.CheckboxFlags("Fullscreen", ref flags, (int)RoomViewerFlags.Fullscreen);
+						if(ImGui.Button("Apply")) {
+							ApplyScreen(gameResX, gameResY, m_flags.HasFlag(RoomViewerFlags.Fullscreen));
+						}
+						ImGui.Separator();
 						ImGui.CheckboxFlags("Clamp tile rects", ref flags, (int)RoomViewerFlags.ClampTileRects);
 						ImGui.CheckboxFlags("Follow background blacklist", ref flags, (int)RoomViewerFlags.FollowBlacklist);
 						ImGui.CheckboxFlags("Use buggy depth sorting", ref flags, (int)RoomViewerFlags.BuggyDepthSorting);
@@ -612,6 +648,7 @@ Object colour: R {colour.R} G {colour.G} B {colour.B} A {colour.A}");
 						m_flags = (RoomViewerFlags)flags;
 
 						ImGui.SliderFloat("Max tiles render", ref m_tileCap, 0, ((m_flags.HasFlag(RoomViewerFlags.ShowObjects) && !m_flags.HasFlag(RoomViewerFlags.UseSeparateSliderForObjects)) ? m_currentRoomTiles.Count + m_currentRoomObjects.Count : m_currentRoomTiles.Count), Math.Floor(m_tileCap).ToString());
+						
 						if (m_flags.HasFlag(RoomViewerFlags.UseSeparateSliderForObjects)) {
 							ImGui.SliderInt("Max objects render", ref m_objectCap, 0, m_currentRoomObjects.Count);
 						}
@@ -729,16 +766,49 @@ Object colour: R {colour.R} G {colour.G} B {colour.B} A {colour.A}");
 
 			if (m_selectedRoom != oldSelectedRoom) { //Room change has occured
 				SetRoomCache();
-				m_eventManager.m_eventList.Clear();
 			}
 
 			if (m_flags.HasFlag(RoomViewerFlags.IsAnimating)) {
 				var max = m_flags.HasFlag(RoomViewerFlags.UseSeparateSliderForObjects) ? m_currentRoomTiles.Count : m_currentRoomTiles.Count + m_currentRoomObjects.Count;
 				m_tileCap += m_animationSpeed * (float)gameTime.ElapsedGameTime.TotalSeconds;
-				if (m_tileCap >= max) {
+				if (m_tileCap >= max) { //if animation is done
 					m_tileCap = max;
-					if (m_flags.HasFlag(RoomViewerFlags.IsVideoMode)) {
-						if (!m_flags.HasFlag(RoomViewerFlags.VideoModeDelaying)) {
+					if (m_flags.HasFlag(RoomViewerFlags.IsVideoMode)) { //if in video mode
+						if (m_flags.HasFlag(RoomViewerFlags.VideoModeDelaying)) { //if waiting for sumn
+							m_videoModeTimer -= gameTime.ElapsedGameTime.TotalSeconds; //tick the timer down
+							if (m_videoModeTimer <= 0) { //if the timer ended
+								if (m_videoModeFlag) { //begin the anim
+									m_videoModeFlag = false;
+									m_flags &= ~(RoomViewerFlags.VideoModeDelaying);
+									m_flags |= RoomViewerFlags.FollowLatestRect;
+									m_tileCap = 0;
+									m_scale = 2;
+								} else { //switch rooms, set timer again
+									m_selectedRoom++;
+									if (m_selectedRoom == m_roomChunk.Count) { //if we're outta rooms
+										m_selectedRoom--;
+										m_flags = m_flagBackup;
+										m_videoModeFlag = false;
+									} else { //show overview of the room before starting anim
+										m_flags &= ~(RoomViewerFlags.FollowLatestRect);
+										SetRoomCache();
+										m_tileCap = max = m_flags.HasFlag(RoomViewerFlags.UseSeparateSliderForObjects) ? m_currentRoomTiles.Count : m_currentRoomTiles.Count + m_currentRoomObjects.Count;
+										m_videoModeTimer = 5f;
+										m_videoModeFlag = true;
+										m_scale = ((float)GraphicsDevice.Viewport.Width / m_currentRoom.Width);
+										var roomWidthScaled = m_currentRoom.Width * m_scale;
+										var roomHeightScaled = m_currentRoom.Height * m_scale;
+										if (roomHeightScaled >= GraphicsDevice.Viewport.Height) {
+											m_scale = (float)GraphicsDevice.Viewport.Height / m_currentRoom.Height;
+											roomWidthScaled = m_currentRoom.Width * m_scale;
+											roomHeightScaled = m_currentRoom.Height * m_scale;
+										}
+										m_tilemapTransform = new(-(roomWidthScaled / 2 - ((float)GraphicsDevice.Viewport.Width / 2)), -(roomHeightScaled / 2 - ((float)GraphicsDevice.Viewport.Height / 2)));
+										//m_flags &= ~(RoomViewerFlags.VideoModeDelaying);
+									}
+								}
+							}
+						} else { //if room anim ended then halt for like 5 secs
 							m_videoModeFlag = false;
 							m_flags |= RoomViewerFlags.VideoModeDelaying;
 							m_videoModeTimer = 5f;
@@ -746,47 +816,12 @@ Object colour: R {colour.R} G {colour.G} B {colour.B} A {colour.A}");
 					} else {
 						m_flags &= ~RoomViewerFlags.IsAnimating;
 					}
-					if (m_flags.HasFlag(RoomViewerFlags.VideoModeDelaying)) {
-						m_videoModeTimer -= gameTime.ElapsedGameTime.TotalSeconds;
-						if (m_videoModeTimer <= 0) {
-							if (m_videoModeFlag) { //begin anim
-								m_videoModeFlag = false;
-								m_flags &= ~(RoomViewerFlags.VideoModeDelaying);
-								m_flags |= RoomViewerFlags.FollowLatestRect;
-								m_tileCap = 0;
-								m_scale = 3;
-							} else { //switcharoo
-								m_selectedRoom++;
-								if (m_selectedRoom == m_roomChunk.Count) {
-									m_selectedRoom--;
-									m_flags = m_flagBackup;
-									m_videoModeFlag = false;
-								} else {
-									m_flags &= ~(RoomViewerFlags.FollowLatestRect);
-									SetRoomCache();
-									m_eventManager.m_eventList.Clear();
-									m_tileCap = max = m_flags.HasFlag(RoomViewerFlags.UseSeparateSliderForObjects) ? m_currentRoomTiles.Count : m_currentRoomTiles.Count + m_currentRoomObjects.Count;
-									m_videoModeTimer = 5f;
-									m_videoModeFlag = true;
-									m_scale = ((float)GraphicsDevice.Viewport.Width / m_currentRoom.Width);
-									var roomWidthScaled = m_currentRoom.Width * m_scale;
-									var roomHeightScaled = m_currentRoom.Height * m_scale;
-									if (roomHeightScaled >= GraphicsDevice.Viewport.Height) {
-										m_scale = (float)GraphicsDevice.Viewport.Height / m_currentRoom.Height;
-										roomWidthScaled = m_currentRoom.Width * m_scale;
-										roomHeightScaled = m_currentRoom.Height * m_scale;
-									}
-									m_tilemapTransform = new(-(roomWidthScaled / 2 - ((float)GraphicsDevice.Viewport.Width / 2)), -(roomHeightScaled / 2 - ((float)GraphicsDevice.Viewport.Height / 2)));
-									//m_flags &= ~(RoomViewerFlags.VideoModeDelaying);
-								}
-							}
-						}
-					}
 				}
 			}
 
 			//Tile cap has changed?
 			if ((int)oldTileCap != (int)m_tileCap) { //NOTE: the placement of this matters, it has to be below the animate code
+				//Console.WriteLine((m_tileCap - oldTileCap).ToString());
 				//Event handling
 				//NOTE: this will skip if the rect gap is larger than 1
 				if((int)m_tileCap != 0) { //not nothing
@@ -800,14 +835,14 @@ Object colour: R {colour.R} G {colour.G} B {colour.B} A {colour.A}");
 						}
 
 						if(rectCurrent.rot != 0 && m_eventsToRecord.HasFlag(EventRecord.Rotation)) {
-							m_eventManager.AddEvent(EventType.ObjectRotation, (int)m_tileCap - 1);
+							m_eventManager.AddEvent(EventType.ObjectRotation, (int)m_tileCap - 1, m_selectedRoom);
 						}
 						if((objectCurrent.PreCreateCodeID > 0 || objectCurrent.CreationCodeID > 0) && m_eventsToRecord.HasFlag(EventRecord.CreationCode)) {
-							m_eventManager.AddEvent(EventType.CreationCode, (int)m_tileCap - 1);
+							m_eventManager.AddEvent(EventType.CreationCode, (int)m_tileCap - 1, m_selectedRoom);
 						}
 						if(objectPrevious is not null) {
 							if(objectPrevious.InstanceID != objectCurrent.InstanceID - 1) {
-								m_eventManager.AddEvent(EventType.IdDiscrepancy, (int)m_tileCap - 1); //ohfuck
+								m_eventManager.AddEvent(EventType.IdDiscrepancy, (int)m_tileCap - 1, m_selectedRoom); //ohfuck
 							}
 						}
 
@@ -820,20 +855,21 @@ Object colour: R {colour.R} G {colour.G} B {colour.B} A {colour.A}");
 						}
 						if(tilePrevious is not null) {
 							if (tilePrevious.ID != tileCurrent.ID - 1) {
-								m_eventManager.AddEvent(EventType.IdDiscrepancy, (int)m_tileCap - 1); //ohfuck
+								m_eventManager.AddEvent(EventType.IdDiscrepancy, (int)m_tileCap - 1, m_selectedRoom); //ohfuck
 							}
 						}
 					}
 					if (rectCurrent is not null) {
 						if (rectCurrent.colour != Color.White && m_eventsToRecord.HasFlag(EventRecord.HasColour)) {
-							m_eventManager.AddEvent(EventType.Colour, (int)m_tileCap - 1);
+							m_eventManager.AddEvent(EventType.Colour, (int)m_tileCap - 1, m_selectedRoom);
 						}
 						if (rectCurrent.scale != Vector2.One && m_eventsToRecord.HasFlag(EventRecord.ScaledRect)) {
-							m_eventManager.AddEvent(EventType.ScaledRect, (int)m_tileCap - 1);
+							m_eventManager.AddEvent(EventType.ScaledRect, (int)m_tileCap - 1, m_selectedRoom);
 						}
 						if(m_eventsToRecord.HasFlag(EventRecord.UvBleed)) { //i'm leaving this for both objects and tiles incase any funny business is happening
-							if(rectCurrent.graphicSource != rectCurrent.ClampedSource()) {
-								m_eventManager.AddEvent(EventType.UvBleed, (int)m_tileCap - 1);
+							//if(rectCurrent.graphicSource != rectCurrent.ClampedSource()) {
+							if(rectCurrent.Bleeds) {
+								m_eventManager.AddEvent(EventType.UvBleed, (int)m_tileCap - 1, m_selectedRoom);
 							}
 						}
 					}
@@ -937,14 +973,12 @@ Object colour: R {colour.R} G {colour.G} B {colour.B} A {colour.A}");
 			m_currentRoomTiles = m_currentRoom.Tiles;
 			m_currentRoomObjects = m_currentRoom.GameObjects;
 
-			//Load missing texture
-			Util.LoadTexture(in m_gdm, out m_missingTexture, "NoSpriteIcon.png");
-			//Load border texture
-			Util.LoadTexture(in m_gdm, out m_borderTexture, "Putrid10x10.png");
-			//Load background texture
-			Util.LoadTexture(in m_gdm, out m_backgroundTexture, "Background.png");
+			Util.LoadTexture(in m_gdm, out m_missingTexture, "NoSpriteIcon.png"); //Load missing texture
+			Util.LoadTexture(in m_gdm, out m_borderTexture, "Putrid10x10.png"); //Load border texture
+			Util.LoadTexture(in m_gdm, out m_backgroundTexture, "Background.png"); //Load background texture
+			Util.LoadTexture(in m_gdm, out m_oobText, "Oob.png"); //Load oob text(ure)
 
-			m_eventManager = new EventManager(in m_gdm, new(0,0));
+			m_eventManager = new EventManager(in m_gdm);
 
 			SetRoomCache();
 

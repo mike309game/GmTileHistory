@@ -2,7 +2,7 @@
 using Microsoft.Xna.Framework.Graphics;
 namespace GmTileHistory {
 	public static class Liner {
-		static BasicEffect m_basicEffect;
+		public static BasicEffect m_basicEffect;
 		static List<VertexPositionColor> m_vertices = new();
 		static int m_lineCount = 0;
 		public static void Init(Game game) {

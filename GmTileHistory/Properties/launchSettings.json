@@ -6,7 +6,7 @@
     },
     "Profile 1": {
       "commandName": "Project",
-      "commandLineArgs": "\"C:\\Users\\PC\\AppData\\Local\\gm_ttt_18648\\gm_ttt_52931\\RoomPropertyTest.win\" /gldevice:OpenGL"
+      "commandLineArgs": "\"C:\\Users\\PC\\AppData\\Local\\gm_ttt_75889\\gm_ttt_58472\\RoomPropertyTest.win\"\r\n /gldevice:OpenGL"
     }
   }
 }
