@@ -47,6 +47,7 @@ namespace GmTileHistory {
 
 		GMDataReader m_dataReader;
 		GMData m_data;
+		string wadPath = "";
 
 		List<Texture2D> m_textures = new();
 		Dictionary<int, Texture2D> m_textureDict = new();
@@ -54,6 +55,8 @@ namespace GmTileHistory {
 		Texture2D m_missingTexture;
 		Texture2D m_backgroundTexture;
 		Texture2D m_oobText;
+		Texture2D m_filePathInstruction;
+		IntPtr m_filePathInstructonImgui;
 
 		//Cache
 		GMUniquePointerList<GMTexturePage> m_texturePageChunk;
@@ -74,7 +77,6 @@ namespace GmTileHistory {
 		float m_animationSpeed = 10.0f; //Tiles per second
 		double m_videoModeTimer = 0f;
 		bool m_videoModeFlag = false; //if it's false then it's waiting to switch room, if it's true then it's waiting to begin the room's animation
-		RoomViewerFlags m_flagBackup;
 
 		List<int> m_blacklistedBackgrounds = new();
 		//For dumb stupid reasons csharp does not support static locals, so these had to be put here
@@ -93,6 +95,7 @@ namespace GmTileHistory {
 			RoomViewerFlags.ShowMainWindow);
 
 		public RoomViewerFlags m_flags = m_startFlags;
+		RoomViewerFlags m_flagBackup = m_startFlags;
 
 		EventRecord m_eventsToRecord = (
 			EventRecord.HasColour |
@@ -107,6 +110,7 @@ namespace GmTileHistory {
 		ImGuiIOPtr m_io;
 
 		float m_scale = 1;
+		float m_videoScale = 1;
 
 		Vector2 m_tilemapTransform = new(0, 0);
 
@@ -239,6 +243,7 @@ namespace GmTileHistory {
 			public Vector2 textureSize;
 			public float rot;
 			public Color colour;
+			public int depth;
 			public Vector2 actualPosition { //position of actual graphic
 				get {
 					return position + textureOffset;
@@ -251,12 +256,11 @@ namespace GmTileHistory {
 					return new Vector2(graphicSource.X - localSourcePos.X, graphicSource.Y - localSourcePos.Y);
 				}
 			}
-			public int depth;
 			public Vector2 RealPosition(float scale, Vector2 transform) {
-				return ((position - pivot) * scale) + transform;
+				return ((position - pivot * this.scale) * scale) + transform;
 			}
 			public Vector2 RealGraphicPosition(float scale, Vector2 transform) {
-				return ((actualPosition - pivot) * scale) + transform;
+				return ((actualPosition - pivot * this.scale) * scale) + transform;
 			}
 			/*public Vector2 RealSize(float scale) {
 				return new Vector2(imageSize.X, imageSize.Y) * scale;
@@ -349,7 +353,24 @@ namespace GmTileHistory {
 		}
 
 		Rect MakeRect(GMRoom.Tile tile) {
-			var texItem = m_backgroundChunk[tile.AssetID].TextureItem;
+			GMTextureItem texItem;
+			if(tile.AssetID == -1) {
+				Console.WriteLine("WHAT THE FUCK");
+				return MakeRect(tile.X, tile.Y, 0, tile.ScaleX, tile.ScaleY);
+			}
+			if (m_dataReader.VersionInfo.IsVersionAtLeast(2)) {
+				var sprite = m_spriteChunk[tile.AssetID];
+				try {
+					texItem = sprite.TextureItems[0];
+				} catch(Exception e) {
+					Console.WriteLine($"To whoever made this game: you are very silly\n{sprite.Name} {sprite.TextureItems.Count}\n{e}");
+#pragma warning disable CS8603 // Possible null reference return.
+					return null; //make the makerect call down here shut the fuck up
+#pragma warning restore CS8603 // Possible null reference return.
+				}
+			} else {
+				texItem = m_backgroundChunk[tile.AssetID].TextureItem;
+			}
 			Rect rect = MakeRect(texItem);
 
 			rect.position = new(tile.X, tile.Y);
@@ -371,9 +392,22 @@ namespace GmTileHistory {
 			//m_eventManager.m_eventList.Clear();
 
 			m_currentRoom = m_roomChunk[m_selectedRoom];
-			m_currentRoomTiles = m_currentRoom.Tiles;
 			m_currentRoomObjects = m_currentRoom.GameObjects;
 
+			//Populate rect lists
+			if (m_dataReader.VersionInfo.IsVersionAtLeast(2)) {
+				m_currentRoomTiles = new(); //Hope to god gc is cool
+				for(var i = m_currentRoom.Layers.Count-1; i >= 0; i--) {
+					var layer = m_currentRoom.Layers[i];
+					if (layer.Kind == GMRoom.Layer.LayerKind.Assets) { //compat layers are asset layers
+						foreach(var tile in layer.Assets.LegacyTiles) {
+							m_currentRoomTiles.Add(tile);
+						}
+					}
+				}
+			} else {
+				m_currentRoomTiles = m_currentRoom.Tiles;
+			}
 			m_currentRoomTiles.ForEach(tile => { m_tileRects.Add(MakeRect(tile)); });
 			m_currentRoomObjects.ForEach(obj => { m_objectRects.Add(MakeRect(obj)); });
 		}
@@ -411,6 +445,12 @@ namespace GmTileHistory {
 			m_spriteBatch.Begin();
 			m_spriteBatch.Draw(m_backgroundTexture, new Rectangle(0, 0, GraphicsDevice.Viewport.Width, GraphicsDevice.Viewport.Height), Color.White);
 			m_spriteBatch.End();
+
+			if(m_data is null) {
+
+				m_imRenderer.AfterLayout();
+				return;
+			}
 
 			if (m_io.MouseDown[2] && IsActive) {
 				m_tilemapTransform.X += m_io.MouseDelta.X;
@@ -458,7 +498,7 @@ namespace GmTileHistory {
 			#region Draw objects
 			if (m_flags.HasFlag(RoomViewerFlags.ShowObjects)) {
 				for (var i = 0; i < m_currentRoomObjects.Count; i++) {
-					var max = m_flags.HasFlag(RoomViewerFlags.UseSeparateSliderForObjects) ? m_objectCap - 1 : (m_tileCap - m_roomChunk[m_selectedRoom].Tiles.Count - 1);
+					var max = m_flags.HasFlag(RoomViewerFlags.UseSeparateSliderForObjects) ? m_objectCap - 1 : (m_tileCap - m_currentRoomTiles.Count - 1);
 					if (i > max) {
 						break;
 					}
@@ -553,6 +593,40 @@ namespace GmTileHistory {
 		}
 
 		protected override void Update(GameTime gameTime) {
+			if(m_data is null) {
+				bool showLoadErrorModal = false;
+				m_imRenderer.BeforeLayout(gameTime);
+				ImGui.SetNextWindowPos(new(GraphicsDevice.Viewport.Width/2, GraphicsDevice.Viewport.Height/2), ImGuiCond.Always, new(0.5f, 0.5f));
+				ImGui.Begin("balls", ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoDecoration | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoMove);
+				ImGui.Image(m_filePathInstructonImgui, new(m_filePathInstruction.Width, m_filePathInstruction.Height));
+				ImGui.Separator(); ImGui.Separator(); ImGui.Separator();
+				ImGui.TextUnformatted("Please input the game's data file path.\nIf you don't know how to get the file path, refer to the image above.");
+				ImGui.InputText("File path", ref wadPath, 0xff);
+				if(ImGui.Button("Load")) {
+					wadPath = wadPath.Trim('"'); //lol
+					if(File.Exists(wadPath)) {
+						var result = LoadWad(wadPath);
+						if(!result) {
+							showLoadErrorModal = true;
+						}
+					}
+				}
+				ImGui.End();
+				if(showLoadErrorModal) { //i still don't know why i can't open the modal whilst a window is open
+					ImGui.OpenPopup("WadLoadError");
+					showLoadErrorModal = false;
+				}
+				bool dummy = true; //dummy value
+				if(ImGui.BeginPopupModal("WadLoadError", ref dummy, ImGuiWindowFlags.NoDecoration | ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoMove)) {
+					ImGui.TextUnformatted("Error loading wad file, look @ console");
+					if(ImGui.Button("Close")) {
+						ImGui.CloseCurrentPopup();
+					}
+					ImGui.EndPopup();
+				}
+				return;
+			}
+
 			var oldSelectedRoom = m_selectedRoom;
 			var oldTileCap = m_tileCap;
 
@@ -563,13 +637,15 @@ namespace GmTileHistory {
 			if (m_flags.HasFlag(RoomViewerFlags.ShowOverlay)) {
 				ImGui.SetNextWindowPos(new System.Numerics.Vector2(0, GraphicsDevice.Viewport.Height), ImGuiCond.Always, new System.Numerics.Vector2(0f, 1f));
 				if (ImGui.Begin("overlay", ImGuiWindowFlags.NoDecoration | ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoNav)) {
-
 					ImGui.TextUnformatted($"Current room: {m_roomChunk[m_selectedRoom].Name}");
 					ImGui.Separator();
 					if (m_tileCap - 1 < m_currentRoomTiles.Count && m_currentRoomTiles.Count != 0) {
 						var tileCurrent = m_currentRoomTiles[GetCurrentTileIndex()];
 						var colour = ABGRToColour(tileCurrent.Color);
-						ImGui.TextUnformatted(@$"Tile asset: {m_backgroundChunk[tileCurrent.AssetID].Name}
+						string name = "Hello hi this is a very funny tile because it SOMEHOW HAS NO ASSET ASSOCIATED WITH IT yet it still has some normal member data stuffs";
+						if(tileCurrent.AssetID != -1)
+							name = (m_dataReader.VersionInfo.IsVersionAtLeast(2) ? m_spriteChunk[tileCurrent.AssetID].Name : m_backgroundChunk[tileCurrent.AssetID].Name).Content;
+						ImGui.TextUnformatted(@$"Tile asset: {name}
 Tile index: {GetCurrentTileIndex() + 1}/{m_currentRoomTiles.Count}
 Tile ID: {tileCurrent.ID}
 Tile position: {tileCurrent.X},{tileCurrent.Y} 
@@ -624,9 +700,9 @@ Object colour: R {colour.R} G {colour.G} B {colour.B} A {colour.A}");
 					if (ImGui.BeginTabItem("Settings")) {
 						ImGui.BeginChild("Child");
 						var flags = (int)m_flags;
-						ImGui.TextUnformatted("Tip: double click to manually change value");
-						ImGui.DragInt("Window width", ref gameResX, 1, 16, m_gdm.GraphicsDevice.DisplayMode.Width);
-						ImGui.DragInt("Window height", ref gameResY, 1, 16, m_gdm.GraphicsDevice.DisplayMode.Height);
+						ImGui.TextUnformatted("Tip: double click to manually change value with drag sliders, click while holding alt\nfor the normal sliders");
+						ImGui.SliderInt("Window width", ref gameResX, 16, m_gdm.GraphicsDevice.DisplayMode.Width);
+						ImGui.SliderInt("Window height", ref gameResY, 16, m_gdm.GraphicsDevice.DisplayMode.Height);
 						ImGui.CheckboxFlags("Fullscreen", ref flags, (int)RoomViewerFlags.Fullscreen);
 						if(ImGui.Button("Apply")) {
 							ApplyScreen(gameResX, gameResY, m_flags.HasFlag(RoomViewerFlags.Fullscreen));
@@ -652,12 +728,13 @@ Object colour: R {colour.R} G {colour.G} B {colour.B} A {colour.A}");
 						if (m_flags.HasFlag(RoomViewerFlags.UseSeparateSliderForObjects)) {
 							ImGui.SliderInt("Max objects render", ref m_objectCap, 0, m_currentRoomObjects.Count);
 						}
-						ImGui.SliderFloat("Scale", ref m_scale, 0.1f, 2);
+						ImGui.DragFloat("Scale", ref m_scale, 0.01f);
 						ImGui.SameLine();
 						if (ImGui.Button("Reset")) {
 							m_scale = 1;
 							m_tilemapTransform = new Vector2(0, 0);
 						}
+						ImGui.DragFloat("Video scale", ref m_videoScale, 0.01f);
 						ImGui.SliderFloat("Anim tiles per second", ref m_animationSpeed, 1, 120, "%.0f");
 						m_animationSpeed = MathF.Floor(m_animationSpeed);
 						ImGui.SameLine();
@@ -695,7 +772,7 @@ Object colour: R {colour.R} G {colour.G} B {colour.B} A {colour.A}");
 								m_flagBackup = m_flags;
 								m_flags &= ~(RoomViewerFlags.UseSeparateSliderForObjects | RoomViewerFlags.FollowBlacklist | RoomViewerFlags.BuggyDepthSorting | RoomViewerFlags.ShowMainWindow);
 								m_flags |= RoomViewerFlags.IsAnimating | RoomViewerFlags.IsVideoMode | RoomViewerFlags.ShowTilePalette | RoomViewerFlags.ShowRectSource | RoomViewerFlags.ShowObjects | RoomViewerFlags.ShowOverlay | RoomViewerFlags.FollowLatestRect;
-								m_scale = 3;
+								m_scale = m_videoScale;
 								//m_tileCap = 9999999;
 								m_videoModeFlag = false;
 							}
@@ -704,6 +781,13 @@ Object colour: R {colour.R} G {colour.G} B {colour.B} A {colour.A}");
 						ImGui.EndTabItem();
 					}
 					if(ImGui.BeginTabItem("Events")) {
+						if (ImGui.Button("Clear events")) {
+							m_eventManager.m_eventList.Clear();
+						}
+						ImGui.SameLine();
+						if (ImGui.Button("Record none")) {
+							m_eventsToRecord = 0;
+						}
 						ImGui.TextUnformatted("Record:");
 						int flags = (int)m_eventsToRecord;
 						ImGui.CheckboxFlags("Rects with colour", ref flags, (int)EventRecord.HasColour);
@@ -782,7 +866,7 @@ Object colour: R {colour.R} G {colour.G} B {colour.B} A {colour.A}");
 									m_flags &= ~(RoomViewerFlags.VideoModeDelaying);
 									m_flags |= RoomViewerFlags.FollowLatestRect;
 									m_tileCap = 0;
-									m_scale = 2;
+									m_scale = m_videoScale;
 								} else { //switch rooms, set timer again
 									m_selectedRoom++;
 									if (m_selectedRoom == m_roomChunk.Count) { //if we're outta rooms
@@ -841,7 +925,7 @@ Object colour: R {colour.R} G {colour.G} B {colour.B} A {colour.A}");
 							m_eventManager.AddEvent(EventType.CreationCode, (int)m_tileCap - 1, m_selectedRoom);
 						}
 						if(objectPrevious is not null) {
-							if(objectPrevious.InstanceID != objectCurrent.InstanceID - 1) {
+							if(objectPrevious.InstanceID != objectCurrent.InstanceID - 1 && m_eventsToRecord.HasFlag(EventRecord.IdDiscrepancy)) {
 								m_eventManager.AddEvent(EventType.IdDiscrepancy, (int)m_tileCap - 1, m_selectedRoom); //ohfuck
 							}
 						}
@@ -854,7 +938,7 @@ Object colour: R {colour.R} G {colour.G} B {colour.B} A {colour.A}");
 							tilePrevious = m_currentRoomTiles[GetCurrentTileIndex() - 1];
 						}
 						if(tilePrevious is not null) {
-							if (tilePrevious.ID != tileCurrent.ID - 1) {
+							if (tilePrevious.ID != tileCurrent.ID - 1 && m_eventsToRecord.HasFlag(EventRecord.IdDiscrepancy)) {
 								m_eventManager.AddEvent(EventType.IdDiscrepancy, (int)m_tileCap - 1, m_selectedRoom); //ohfuck
 							}
 						}
@@ -877,13 +961,13 @@ Object colour: R {colour.R} G {colour.G} B {colour.B} A {colour.A}");
 
 				//Tile following
 				if (m_flags.HasFlag(RoomViewerFlags.FollowLatestRect)) {
-					float tileCamCenterX, tileCamCenterY;
-					if (m_tileCap - 1 < m_currentRoomTiles.Count && m_currentRoomTiles.Count != 0) {
+					float tileCamCenterX = 0, tileCamCenterY = 0;
+					if (m_tileCap - 1 < m_currentRoomTiles.Count && m_currentRoomTiles.Count != 0) { //if within tile cap still
 						//Console.WriteLine($"{GetCurrentTileIndex()}");
 						var tileCurrent = m_currentRoomTiles[GetCurrentTileIndex()];
 						tileCamCenterX = -((tileCurrent.X + tileCurrent.Width / 2) * m_scale - GraphicsDevice.Viewport.Width / 2);
 						tileCamCenterY = -((tileCurrent.Y + tileCurrent.Height / 2) * m_scale - GraphicsDevice.Viewport.Height / 2);
-					} else {
+					} else if(m_objectRects.Count != 0) { //if not, check if there are objects first
 						var rect = m_objectRects[GetCurrentObjectIndex()];
 
 						tileCamCenterX = -((rect.position.X + rect.imageSize.X / 2) * m_scale - GraphicsDevice.Viewport.Width / 2);
@@ -900,7 +984,7 @@ Object colour: R {colour.R} G {colour.G} B {colour.B} A {colour.A}");
 			base.Update(gameTime);
 		}
 
-		public GameMain(string[] args) {
+		public GameMain(string? wadPath) {
 			m_gdm = new GraphicsDeviceManager(this) {
 				PreferredBackBufferWidth = 1360,
 				PreferredBackBufferHeight = 860,
@@ -912,9 +996,7 @@ Object colour: R {colour.R} G {colour.G} B {colour.B} A {colour.A}");
 			IsFixedTimeStep = false;
 
 			m_gdm.ApplyChanges();
-
-			using FileStream fs = new(args[0], FileMode.Open);
-			m_dataReader = new GMDataReader(fs, fs.Name);
+			this.wadPath = wadPath ?? String.Empty;
 		}
 
 		protected override void Initialize() {
@@ -933,33 +1015,18 @@ Object colour: R {colour.R} G {colour.G} B {colour.B} A {colour.A}");
 
 			base.Initialize();
 		}
-		protected override void LoadContent() {
-			m_spriteBatch = new SpriteBatch(GraphicsDevice);
-			Liner.Init(this);
-
-			//Load gamemaker wad
-			m_dataReader.Deserialize();
+		bool LoadWad(string path) {
+			using (FileStream fs = new(path, FileMode.Open)) {
+				try {
+					m_dataReader = new GMDataReader(fs, fs.Name);
+					//Load gamemaker wad
+					m_dataReader.Deserialize();
+				} catch(Exception e) {
+					Console.WriteLine($"Couldn't load wad\nException: {e}");
+					return false;
+				}
+			}
 			m_data = m_dataReader.Data;
-
-			//Load texture pages as xna texture2d
-			foreach (GMTexturePage texture in m_data.GetChunk<GMChunkTXTR>().List) {
-				if (texture.TextureData.IsQoi) {
-					throw new NotImplementedException(
-						"I don't support gms2, let alone a recent version."
-						);
-				}
-
-				using (var stream = new MemoryStream(texture.TextureData.Data.Memory.ToArray())) {
-					m_textures.Add(Texture2D.FromStream(GraphicsDevice, stream));
-				}
-			}
-
-			//Room name list
-			List<string> roomNames = new();
-			foreach (GMRoom room in m_data.GetChunk<GMChunkROOM>().List) {
-				roomNames.Add(room.Name.ToString());
-			}
-			m_roomNames = roomNames.ToArray();
 
 			//Populate cache
 			m_texturePageChunk = m_data.GetChunk<GMChunkTXTR>().List;
@@ -973,14 +1040,49 @@ Object colour: R {colour.R} G {colour.G} B {colour.B} A {colour.A}");
 			m_currentRoomTiles = m_currentRoom.Tiles;
 			m_currentRoomObjects = m_currentRoom.GameObjects;
 
+			//Load texture pages as xna texture2d
+			foreach (GMTexturePage texture in m_texturePageChunk) {
+				if (texture.TextureData.IsQoi) {
+					throw new NotImplementedException(
+						"Too modern gamemaker version!!!"
+						);
+				}
+
+				using (var stream = new MemoryStream(texture.TextureData.Data.Memory.ToArray())) {
+					m_textures.Add(Texture2D.FromStream(GraphicsDevice, stream));
+				}
+			}
+
+			//Room name list
+			List<string> roomNames = new();
+			foreach (GMRoom room in m_roomChunk) {
+				roomNames.Add(room.Name.ToString());
+			}
+			m_roomNames = roomNames.ToArray();
+
+			SetRoomCache();
+			return true;
+		}
+		protected override void LoadContent() {
+			m_spriteBatch = new SpriteBatch(GraphicsDevice);
+			Liner.Init(this);
+
 			Util.LoadTexture(in m_gdm, out m_missingTexture, "NoSpriteIcon.png"); //Load missing texture
 			Util.LoadTexture(in m_gdm, out m_borderTexture, "Putrid10x10.png"); //Load border texture
 			Util.LoadTexture(in m_gdm, out m_backgroundTexture, "Background.png"); //Load background texture
 			Util.LoadTexture(in m_gdm, out m_oobText, "Oob.png"); //Load oob text(ure)
+			Util.LoadTexture(in m_gdm, out m_filePathInstruction, "PathInstruction.png"); //Load instruction texture
+			m_filePathInstructonImgui = m_imRenderer.BindTexture(m_filePathInstruction); //bind to imgui
+
+			if (wadPath != String.Empty) { //please have this right here because it depends on the missing texture texture
+				try {
+					LoadWad(wadPath);
+				} catch (Exception e) {
+					Console.WriteLine(e);
+				}
+			}
 
 			m_eventManager = new EventManager(in m_gdm);
-
-			SetRoomCache();
 
 			base.LoadContent();
 		}
@@ -992,6 +1094,13 @@ Object colour: R {colour.R} G {colour.G} B {colour.B} A {colour.A}");
 			foreach (var texture in m_textures) {
 				texture.Dispose();
 			}
+			m_imRenderer.UnbindTexture(m_filePathInstructonImgui);
+
+			m_borderTexture.Dispose();
+			m_missingTexture.Dispose();
+			m_backgroundTexture.Dispose();
+			m_oobText.Dispose();
+			m_filePathInstruction.Dispose();
 
 			base.UnloadContent();
 		}

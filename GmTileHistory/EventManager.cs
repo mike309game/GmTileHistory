@@ -88,9 +88,8 @@ namespace GmTileHistory {
 		public void DrawNumbers(in SpriteBatch spriteBatch, int number, float x, float y) {
 			string numberString = number.ToString();
 			int width = 0;
-			int i = 0;
 			//spriteBatch.Begin();
-			for(i = 0; i < numberString.Length; i++) {
+			for(int i = 0; i < numberString.Length; i++) {
 				var rect = new Rectangle(FONTSTARTX + 8 * ((byte)(numberString[i]) - 48), FONTSTARTY, 8, 10);
 				if (i == 0) {
 					if(numberString[0] == '-') {
