@@ -22,6 +22,7 @@ namespace GmTileHistory {
 		FollowLatestRect = 1 << 8, //Follow the latest rect
 		ShowOverlay = 1 << 9, //Show info overlay
 		ShowMainWindow = 1 << 10, //Show main window lol
+		BlinkTilemap = 1 << 11, //Blink the tilemap
 
 		IsAnimating = 1 << 20, //Is animation going on
 		IsVideoMode = 1 << 21, //Auto advance rooms, with a delay between when advancing
@@ -74,6 +75,7 @@ namespace GmTileHistory {
 
 		float m_tileCap = 99999999;
 		int m_objectCap = 999999999;
+		float m_tilemapAlpha = 1f;
 		float m_animationSpeed = 10.0f; //Tiles per second
 		double m_videoModeTimer = 0f;
 		bool m_videoModeFlag = false; //if it's false then it's waiting to switch room, if it's true then it's waiting to begin the room's animation
@@ -279,9 +281,12 @@ namespace GmTileHistory {
 				source.Height = (int)Math.Min(textureSize.Y - localSourcePos.Y, graphicSource.Height);
 				return source;
 			}
-			public void Draw(SpriteBatch spriteBatch, bool clampRect) {
+			public void Draw(SpriteBatch spriteBatch, bool clampRect, float alpha) {
 				Rectangle source;
-				if(!Bleeds || clampRect) {
+				var blend = colour;
+				blend.A = (byte)(alpha * 255);
+
+				if (!Bleeds || clampRect) {
 					source = ClampedSource();
 				} else {
 					source = graphicSource;
@@ -289,7 +294,7 @@ namespace GmTileHistory {
 				spriteBatch.Draw(texture,
 					position,
 					source,
-					colour,
+					blend,
 					-MathHelper.ToRadians(rot),
 					pivot - textureOffset,
 					scale,
@@ -488,8 +493,11 @@ namespace GmTileHistory {
 						continue;
 					}
 				}
+				float alpha = m_tilemapAlpha;
+				if (m_flags.HasFlag(RoomViewerFlags.BlinkTilemap))
+					alpha = MathF.Abs(MathF.Sin((float)gameTime.TotalGameTime.TotalSeconds));
 
-				m_tileRects[i].Draw(m_spriteBatch, m_flags.HasFlag(RoomViewerFlags.ClampTileRects));
+                m_tileRects[i].Draw(m_spriteBatch, m_flags.HasFlag(RoomViewerFlags.ClampTileRects), alpha);
 
 				lastTile = m_tileRects[i];
 			}
@@ -502,7 +510,7 @@ namespace GmTileHistory {
 					if (i > max) {
 						break;
 					}
-					m_objectRects[i].Draw(m_spriteBatch, false);
+					m_objectRects[i].Draw(m_spriteBatch, false, 1f);
 					lastObject = m_objectRects[i];
 					//Debug.Assert(i != 0);
 				}
@@ -734,6 +742,17 @@ Object colour: R {colour.R} G {colour.G} B {colour.B} A {colour.A}");
 							m_scale = 1;
 							m_tilemapTransform = new Vector2(0, 0);
 						}
+
+						if (m_flags.HasFlag(RoomViewerFlags.BlinkTilemap))
+							ImGui.BeginDisabled();
+						ImGui.SliderFloat("Tilemap transparency", ref m_tilemapAlpha, 0f, 1f);
+						if (m_flags.HasFlag(RoomViewerFlags.BlinkTilemap))
+							ImGui.EndDisabled();
+						ImGui.SameLine();
+						if(ImGui.Button($"Auto blink {(m_flags.HasFlag(RoomViewerFlags.BlinkTilemap) ? "ON" : "OFF")}")) {
+							m_flags ^= RoomViewerFlags.BlinkTilemap;
+						}
+
 						ImGui.DragFloat("Video scale", ref m_videoScale, 0.01f);
 						ImGui.SliderFloat("Anim tiles per second", ref m_animationSpeed, 1, 120, "%.0f");
 						m_animationSpeed = MathF.Floor(m_animationSpeed);
@@ -995,7 +1014,7 @@ Object colour: R {colour.R} G {colour.G} B {colour.B} A {colour.A}");
 			IsMouseVisible = true;
 			IsFixedTimeStep = false;
 
-			m_gdm.ApplyChanges();
+			//m_gdm.ApplyChanges();
 			this.wadPath = wadPath ?? String.Empty;
 		}
 
